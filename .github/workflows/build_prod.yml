@@ -1,0 +1,42 @@
+name: Deploy prod
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    name: Deploy Geonosis on GCloud
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v2.0.0
+
+      - name: Build & deploy
+        run: |
+          rm -Rf common/
+          rm -Rf authlib/
+          git rm -r common
+          git rm -r authlib
+          git submodule add https://howova3801:howova3801@bitbucket.org/goleeteam/backend-common-node.git common
+          git submodule add https://howova3801:howova3801@bitbucket.org/goleeteam/backend-authlib-node.git authlib
+          curl -o /tmp/google-cloud-sdk.tar.gz https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-279.0.0-darwin-x86_64.tar.gz
+          tar -xvf /tmp/google-cloud-sdk.tar.gz -C /tmp/
+          /tmp/google-cloud-sdk/install.sh -q
+          source /tmp/google-cloud-sdk/path.bash.inc
+          gcloud components install kubectl
+          echo $GCLOUD_API_KEYFILE  > ./gcloud-api-key.json
+          gcloud auth activate-service-account --key-file gcloud-api-key.json
+          gcloud config set project golee-infra
+          printenv NPM_TOKEN
+          npm config set //registry.npmjs.org/:_authToken ${NPM_TOKEN}
+          npm install
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          VERSION_CODE="s$CURRENT_VERSION-$(git rev-parse HEAD)"
+          SERVICE_NAME="geonosis-service"
+          REMOTE_IMAGE_PATH="eu.gcr.io/golee-infra/$SERVICE_NAME:$VERSION_CODE"
+          gcloud auth configure-docker
+          docker build -t goleedev/$SERVICE_NAME:$VERSION_CODE .
+          docker tag goleedev/$SERVICE_NAME:$VERSION_CODE $REMOTE_IMAGE_PATH
+          docker push $REMOTE_IMAGE_PATH
+          gcloud container clusters get-credentials standard-cluster-1 --zone=europe-west6-a
+          kubectl set image deployment $SERVICE_NAME-prod $SERVICE_NAME-sha256-1=$REMOTE_IMAGE_PATH --namespace=prod
